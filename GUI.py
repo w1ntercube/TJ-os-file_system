@@ -48,7 +48,14 @@ class FileSystemGUI(QMainWindow):
             self.tree = QTreeWidget(self)
             self.tree.setHeaderLabel("File System")
             self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
-            self.connect_signals()
+            self.tree.customContextMenuRequested.connect(self.open_menu)
+
+            # 添加双击链接
+            # self.tree.itemDoubleClicked.connect(self.change_directory)
+            self.tree.itemDoubleClicked.connect(self.select_item)
+
+            self.tree.itemExpanded.connect(self.on_item_expanded)
+            self.tree.itemCollapsed.connect(self.on_item_collapsed)
 
             # 创建根项目并填充树
             self.root_item = QTreeWidgetItem(self.tree)
@@ -74,12 +81,6 @@ class FileSystemGUI(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
-    def connect_signals(self):
-        self.tree.customContextMenuRequested.connect(self.open_menu)
-        self.tree.itemDoubleClicked.connect(self.select_item)
-        self.tree.itemExpanded.connect(self.on_item_expanded)
-        self.tree.itemCollapsed.connect(self.on_item_collapsed)
-
     def populate_tree(self, parent_item, parent_fcb):
         # 填充子项目
         for name, fcb in parent_fcb.children.items():
@@ -92,6 +93,14 @@ class FileSystemGUI(QMainWindow):
             else:
                 child_item.setIcon(0, QIcon("images/file.webp"))
 
+    def get_full_path(self, fcb):
+        path = []
+        while fcb.name != "root":
+            path.insert(0, fcb.name)
+            parent_item = self.find_parent_item(fcb)
+            fcb = parent_item.data(0, Qt.UserRole)
+        return "/root/" + "/".join(path)
+
     def open_menu(self, position):
         item = self.tree.itemAt(position)
         if item:
@@ -99,36 +108,49 @@ class FileSystemGUI(QMainWindow):
             menu = QMenu()
 
             if fcb.is_directory:
+                # 目录有选项：创建文件、创建目录、删除、属性
                 new_menu = menu.addMenu("New")
                 new_file_act = new_menu.addAction("File")
                 new_dir_act = new_menu.addAction("Directory")
+                properties_act = menu.addAction("Properties")
+                delete_act = menu.addAction("Delete")
+
+                action = menu.exec_(self.tree.viewport().mapToGlobal(position))
+
+                if action is None:
+                    return
+
+                if action == new_file_act:
+                    self.create_entry(item, entry_type="File")
+                elif action == new_dir_act:
+                    self.create_entry(item, entry_type="Directory")
+                elif action == delete_act:
+                    self.delete_entry(item)
+                elif action == properties_act:
+                    self.show_properties(item)
             else:
+                # 文件有选项：读、写、复制、属性、删除
                 read_act = menu.addAction("Read")
                 write_act = menu.addAction("Write")
                 copy_act = menu.addAction("Copy")
+                properties_act = menu.addAction("Properties")
+                delete_act = menu.addAction("Delete")
 
-            properties_act = menu.addAction("Properties")
-            delete_act = menu.addAction("Delete")
+                action = menu.exec_(self.tree.viewport().mapToGlobal(position))
 
-            action = menu.exec_(self.tree.viewport().mapToGlobal(position))
+                if action is None:
+                    return
 
-            if action is None:
-                return
-
-            if action == new_file_act:
-                self.create_entry(item, entry_type="File")
-            elif action == new_dir_act:
-                self.create_entry(item, entry_type="Directory")
-            elif action == delete_act:
-                self.delete_entry(item)
-            elif action == properties_act:
-                self.show_properties(item)
-            elif action == read_act:
-                self.read_file(item)
-            elif action == write_act:
-                self.write_file(item)
-            elif action == copy_act:
-                self.copy_entry(item)
+                if action == delete_act:
+                    self.delete_entry(item)
+                elif action == properties_act:
+                    self.show_properties(item)
+                elif action == read_act:
+                    self.read_file(item)
+                elif action == write_act:
+                    self.write_file(item)
+                elif action == copy_act:
+                    self.copy_entry(item)
 
     def create_entry(self, parent_item, entry_type):
         name, ok = QInputDialog.getText(
@@ -244,6 +266,20 @@ class FileSystemGUI(QMainWindow):
         if self.fs.current_directory == fcb:
             self.fs.current_directory = parent_fcb
 
+    def delete_directory_recursively(self, fcb):
+        for child_name in list(fcb.children.keys()):
+            child_fcb = fcb.children[child_name]
+            if child_fcb.is_directory:
+                self.delete_directory_recursively(child_fcb)
+            else:
+                self.fs.delete_file(child_name)
+
+        # 最后删除目录本身
+        parent_fcb = self.fs.current_directory.children.get(fcb.name, None)
+        if parent_fcb and parent_fcb.is_directory:
+            del self.fs.current_directory.children[fcb.name]
+            print(f"Directory {fcb.name} and its contents deleted.")
+
     def write_file(self, item):
         fcb = item.data(0, Qt.UserRole)
         full_path = self.get_full_path(fcb)
@@ -271,23 +307,18 @@ class FileSystemGUI(QMainWindow):
             else:
                 self.display_message(f"File {fcb.name} is empty.")
 
-    def select_item(self, item, column):
-        # 捕获双击事件以选择项目
-        fcb = item.data(0, Qt.UserRole)
-        self.tree.setCurrentItem(item)
-        if not fcb.is_directory:
-            self.read_file(item)
-
-    def get_full_path(self, fcb):
-        path = []
-        while fcb.name != "root":
-            path.insert(0, fcb.name)
-            parent_item = self.find_parent_item(fcb)
-            fcb = parent_item.data(0, Qt.UserRole)
-        return "/root/" + "/".join(path)
-
     def find_parent_item(self, fcb):
-        return self.find_item(self.root_item, "data", fcb)
+        def recursive_find(item, target_fcb):
+            for i in range(item.childCount()):
+                child = item.child(i)
+                if child.data(0, Qt.UserRole) == target_fcb:
+                    return item
+                result = recursive_find(child, target_fcb)
+                if result:
+                    return result
+            return None
+
+        return recursive_find(self.root_item, fcb)
 
     def copy_entry(self, item):
         if item is None:
@@ -344,6 +375,13 @@ class FileSystemGUI(QMainWindow):
         self.display_message(f"Pasted {new_entry.name} into {target_fcb.name}.")
         self.refresh_view()
 
+    def _update_fcb_references(self, fcb, parent):
+        # 更新 fcb 引用
+        for name, child in fcb.children.items():
+            if child.is_directory:
+                self._update_fcb_references(child, fcb)
+            parent.children[name] = child
+
     def change_directory(self, item, column):
         fcb = item.data(0, Qt.UserRole)
         if fcb.is_directory:
@@ -352,62 +390,12 @@ class FileSystemGUI(QMainWindow):
         else:
             self.read_file(item)
 
-    def refresh_view(self):
-        expanded_items = self.get_expanded_items(self.root_item)
-        self.tree.clear()
-
-        self.root_item = QTreeWidgetItem(self.tree)
-        self.root_item.setText(0, "root")
-        self.root_item.setData(0, Qt.UserRole, self.fs.root)
-        self.root_item.setIcon(0, QIcon("images/directory.webp"))
-        self.tree.addTopLevelItem(self.root_item)
-        self.populate_tree(self.root_item, self.fs.root)
-
-        self.expand_items(expanded_items)
-        self.display_message("View refreshed.")
-
-    def get_expanded_items(self, item):
-        expanded_items = []
-        if item.isExpanded():
-            expanded_items.append(item.data(0, Qt.UserRole).name)
-        for i in range(item.childCount()):
-            child_item = item.child(i)
-            # 递归获取展开的项目
-            expanded_items.extend(self.get_expanded_items(child_item))
-        return expanded_items
-
-    def expand_items(self, expanded_items):
-        for name in expanded_items:
-            item = self.find_item_by_name(self.root_item, name)
-            if item:
-                item.setExpanded(True)
-
-    def find_item(self, item, key, value):
-        if item.data(0, Qt.UserRole) == value:
-            return item
-        for i in range(item.childCount()):
-            child = item.child(i)
-            found_item = self.find_item(child, key, value)
-            if found_item:
-                return found_item
-        return None
-
-    def find_item_by_fcb(self, fcb):
-        # 递归查找项目
-        def recursive_find(item, target_fcb):
-            if item.data(0, Qt.UserRole) == target_fcb:
-                return item
-            for i in range(item.childCount()):
-                child = item.child(i)
-                result = recursive_find(child, target_fcb)
-                if result:
-                    return result
-            return None
-
-        return recursive_find(self.root_item, fcb)
-
-    def find_item_by_name(self, parent_item, name):
-        return self.find_item(parent_item, "name", name)
+    def select_item(self, item, column):
+        # 捕获双击事件以选择项目
+        fcb = item.data(0, Qt.UserRole)
+        self.tree.setCurrentItem(item)
+        if not fcb.is_directory:
+            self.read_file(item)
 
     def on_item_expanded(self, item):
         # 捕获项目展开事件
@@ -441,6 +429,9 @@ class FileSystemGUI(QMainWindow):
                 event.accept()
         else:
             event.ignore()
+
+    def display_message(self, message):
+        self.textEdit.append(message)
 
     def show_properties(self, item):
         fcb = item.data(0, Qt.UserRole)
@@ -516,6 +507,30 @@ class FileSystemGUI(QMainWindow):
 
         self.create_entry(parent_item, entry_type)
 
+    def validate_current_directory(self):
+        if (
+            not self.fs.current_directory
+            or self.fs.current_directory.name not in self.fs.root.children
+        ):
+            self.display_message("Current directory is invalid. Resetting to root.")
+            self.fs.current_directory = self.fs.root
+            return self.root_item
+        return self.find_item_by_fcb(self.fs.current_directory)
+
+    def find_item_by_fcb(self, fcb):
+        # 递归查找项目
+        def recursive_find(item, target_fcb):
+            if item.data(0, Qt.UserRole) == target_fcb:
+                return item
+            for i in range(item.childCount()):
+                child = item.child(i)
+                result = recursive_find(child, target_fcb)
+                if result:
+                    return result
+            return None
+
+        return recursive_find(self.root_item, fcb)
+
     def rename_entry(self):
         item = self.tree.currentItem()
         if item:
@@ -525,6 +540,46 @@ class FileSystemGUI(QMainWindow):
                 fcb.name = name
                 item.setText(0, name)
                 self.display_message(f"Renamed to {name}.")
+
+    def refresh_view(self):
+        expanded_items = self.get_expanded_items(self.root_item)
+        self.tree.clear()
+
+        self.root_item = QTreeWidgetItem(self.tree)
+        self.root_item.setText(0, "root")
+        self.root_item.setData(0, Qt.UserRole, self.fs.root)
+        self.root_item.setIcon(0, QIcon("images/directory.webp"))
+        self.tree.addTopLevelItem(self.root_item)
+        self.populate_tree(self.root_item, self.fs.root)
+
+        self.expand_items(expanded_items)
+        self.display_message("View refreshed.")
+
+    def get_expanded_items(self, item):
+        expanded_items = []
+        if item.isExpanded():
+            expanded_items.append(item.data(0, Qt.UserRole).name)
+        for i in range(item.childCount()):
+            child_item = item.child(i)
+            # 递归获取展开的项目
+            expanded_items.extend(self.get_expanded_items(child_item))
+        return expanded_items
+
+    def expand_items(self, expanded_items):
+        for name in expanded_items:
+            item = self.find_item_by_name(self.root_item, name)
+            if item:
+                item.setExpanded(True)
+
+    def find_item_by_name(self, parent_item, name):
+        if parent_item.data(0, Qt.UserRole).name == name:
+            return parent_item
+        for i in range(parent_item.childCount()):
+            child_item = parent_item.child(i)
+            found_item = self.find_item_by_name(child_item, name)
+            if found_item:
+                return found_item
+        return None
 
     def show_about(self):
         about_message = (
@@ -547,30 +602,6 @@ class FileSystemGUI(QMainWindow):
         about_dialog.setText(about_message)
         about_dialog.setStandardButtons(QMessageBox.Ok)
         about_dialog.exec_()
-
-    def delete_directory_recursively(self, fcb):
-        for child_name in list(fcb.children.keys()):
-            child_fcb = fcb.children[child_name]
-            if child_fcb.is_directory:
-                self.delete_directory_recursively(child_fcb)
-            else:
-                self.fs.delete_file(child_name)
-
-        # 最后删除目录本身
-        parent_fcb = self.fs.current_directory.children.get(fcb.name, None)
-        if parent_fcb and parent_fcb.is_directory:
-            del self.fs.current_directory.children[fcb.name]
-            print(f"Directory {fcb.name} and its contents deleted.")
-
-    def _update_fcb_references(self, fcb, parent):
-        # 更新 fcb 引用
-        for name, child in fcb.children.items():
-            if child.is_directory:
-                self._update_fcb_references(child, fcb)
-            parent.children[name] = child
-
-    def display_message(self, message):
-        self.textEdit.append(message)
 
     def format_disk(main_window):
         reply = QMessageBox.question(
