@@ -2,21 +2,6 @@
 
 FileSystemApp 是一个简单的文件系统管理程序，使用 PyQt 构建，具有基本的文件和目录操作功能。
 
-
-## 目录结构
-
-project/
-│
-├── images/
-│ ├── directory.webp
-│ ├── file.webp
-│ └── simple_file_system.webp
-├── main.py
-├── GUI.py
-├── simple_file_system.py
-└── menu.py
-
-
 ## 功能
 
 - 创建文件和目录
